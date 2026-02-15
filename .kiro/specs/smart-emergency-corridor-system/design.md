@@ -804,7 +804,7 @@ interface AlertLog {
 ## Security Considerations
 
 ### Authentication Security
-- JWT tokens with short expiration (1 hour)
+- JWT tokens with short expiration (2 hour)
 - Refresh tokens stored securely with rotation
 - Digital signatures for vehicle credentials
 - Rate limiting on authentication endpoints
