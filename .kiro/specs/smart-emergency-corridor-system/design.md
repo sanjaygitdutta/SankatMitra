@@ -131,7 +131,7 @@ interface Credentials {
 ```
 
 **Implementation Details**:
-- Uses OAuth 2.0 with JWT tokens (1-hour expiration)
+- Uses OAuth 2.0 with JWT tokens (2-hour expiration)
 - Implements circuit breaker pattern for government database calls
 - Caches successful authentications for 5 minutes
 - Rate limits: 100 requests/minute per vehicle
