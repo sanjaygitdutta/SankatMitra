@@ -1,0 +1,38 @@
+# 🚫 SankatMitra - Ignore Secrets for GitHub Public
+
+# Firebase Config (Generated)
+**/firebase_options.dart
+**/google-services.json
+**/GoogleService-Info.plist
+
+# AWS & Secret Keys
+.env
+.env.local
+.aws/
+**/config.json
+
+# Flutter/Dart
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+ios/Flutter/Generated.xcconfig
+scripts/config.sh
+
+# Python/ML
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.hypothesis/
+
+# VS Code & IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Temporary Files
+/tmp/
+*.log
