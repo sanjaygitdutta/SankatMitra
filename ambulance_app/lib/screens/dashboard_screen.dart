@@ -15,10 +15,7 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  // ignore: unused_field
   GoogleMapController? _mapController;
-  final Set<Marker> _markers = {};
-  final Set<Polyline> _polylines = {};
 
   @override
   Widget build(BuildContext context) {
@@ -51,7 +48,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               const Text('Sim', style: TextStyle(fontSize: 12, color: Colors.white70)),
               Switch(
                 value: corridorProv.isSimulationMode,
-                activeColor: const Color(0xFFE53935),
+                activeTrackColor: const Color(0xFFE53935),
                 onChanged: (val) => corridorProv.toggleSimulation(val),
               ),
             ],
@@ -161,6 +158,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
     );
+  } // ← closes build()
+
   Set<Marker> _buildMarkers(CorridorProvider prov) {
     final markers = <Marker>{};
     if (prov.activeCorridor != null) {
