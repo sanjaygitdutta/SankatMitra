@@ -15,6 +15,7 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+  // ignore: unused_field
   GoogleMapController? _mapController;
 
   @override
