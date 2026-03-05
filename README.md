@@ -43,7 +43,7 @@ SankatMitra/
 │   │   ├── route_lambda/
 │   │   ├── alert_lambda/
 │   │   └── spoofing_lambda/
-│   └── shared/             # Shared Python utilities
+│   └── shared/             # Shared Utilities (Bedrock GenAI, Models, Security)
 ├── ml/
 │   └── rnn_model/          # RNN/LSTM SageMaker model
 ├── infra/
