@@ -68,7 +68,7 @@ void _startCivilianGpsHeartbeat() {
     ),
   ).listen((position) async {
     try {
-      final dio = Dio(BaseOptions(baseUrl: 'https://api.sankatmitra.in/prod'));
+      final dio = Dio(BaseOptions(baseUrl: 'https://r0bh4n62b6.execute-api.ap-south-1.amazonaws.com/prod/'));
       await dio.post('/gps/update', data: {
         'vehicleId': 'civilian_${position.timestamp.millisecondsSinceEpoch}', // Anonymous
         'type': 'CIVILIAN',
@@ -123,8 +123,15 @@ class CivilianHomeScreen extends StatefulWidget {
 
 class _CivilianHomeScreenState extends State<CivilianHomeScreen>
     with SingleTickerProviderStateMixin {
+  GoogleMapController? _mapController;
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
+  final Set<Marker> _markers = {};
+  StreamSubscription<Position>? _positionSubscription;
+  Timer? _simTimer;
+  LatLng? _simAmbulancePos;
+  BitmapDescriptor? _carIcon;
+  BitmapDescriptor? _ambIcon;
 
   @override
   void initState() {
@@ -136,41 +143,194 @@ class _CivilianHomeScreenState extends State<CivilianHomeScreen>
     _pulseAnimation = Tween<double>(begin: 0.85, end: 1.0).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
+    
+    // Create icons
+    _createEmojiIcons();
 
     // Initialize FCM
     _setupFCM();
   }
+
+  Future<void> _createEmojiIcons() async {
+    // ignore: deprecated_member_use
+    _carIcon = await BitmapDescriptor.fromAssetImage(
+      const ImageConfiguration(size: Size(48, 48)),
+      'assets/images/car_marker.png',
+    );
+    // ignore: deprecated_member_use
+    _ambIcon = await BitmapDescriptor.fromAssetImage(
+      const ImageConfiguration(size: Size(48, 48)),
+      'assets/images/ambulance_marker.png',
+    );
+    if (mounted) setState(() {});
+  }
+
+
+
+  void _moveToLocation(double lat, double lon) {
+    _mapController?.animateCamera(
+      CameraUpdate.newLatLngZoom(LatLng(lat, lon), 15),
+    );
+  }
+
+  void _startLocationTracking() async {
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    
+    if (permission == LocationPermission.whileInUse || 
+        permission == LocationPermission.always) {
+      _positionSubscription = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: 5,
+        ),
+      ).listen((Position position) {
+        if (!mounted) return;
+        setState(() {
+          _markers.removeWhere((m) => m.markerId.value == 'user_car');
+          _markers.add(Marker(
+            markerId: const MarkerId('user_car'),
+            position: LatLng(position.latitude, position.longitude),
+            icon: _carIcon ?? BitmapDescriptor.defaultMarker,
+            infoWindow: const InfoWindow(title: 'MY CAR'),
+          ));
+        });
+        
+        // Only auto-center on move if they haven't manually moved the map? 
+        // For now, let's keep it simple and follow.
+        _moveToLocation(position.latitude, position.longitude);
+      });
+    } else if (permission == LocationPermission.deniedForever) {
+      _showPermissionError();
+    }
+  }
+
+  void _showPermissionError() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Location permission is permanently denied. Please enable it in browser settings.'),
+        backgroundColor: Colors.red,
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    _positionSubscription?.cancel();
+    _simTimer?.cancel();
+    super.dispose();
+  }
+
 
   void _setupFCM() {
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       if (!mounted) return;
       final alert = context.read<AlertProvider>();
       alert.handleIncomingAlert(message.data);
+      _startAmbulanceSimulation(message.data);
     });
     // Background handler is already registered in _initializeFirebase
   }
 
-  @override
-  void dispose() {
-    _pulseController.dispose();
-    super.dispose();
+  void _startAmbulanceSimulation(Map<String, dynamic> data) {
+    _simTimer?.cancel();
+    final lat = double.tryParse(data['ambulanceLat'] ?? '');
+    final lon = double.tryParse(data['ambulanceLon'] ?? '');
+    if (lat == null || lon == null) return;
+
+    _simAmbulancePos = LatLng(lat, lon);
+    
+    // Smoothly crawl towards the user over the next 60 seconds
+    _simTimer = Timer.periodic(const Duration(milliseconds: 1000), (timer) async {
+      if (_simAmbulancePos == null || !mounted) {
+        timer.cancel();
+        return;
+      }
+
+      final userPos = await Geolocator.getCurrentPosition();
+      setState(() {
+        // Move 1/60th of the distance each second
+        double newLat = _simAmbulancePos!.latitude + (userPos.latitude - _simAmbulancePos!.latitude) / 60;
+        double newLon = _simAmbulancePos!.longitude + (userPos.longitude - _simAmbulancePos!.longitude) / 60;
+        _simAmbulancePos = LatLng(newLat, newLon);
+        
+        _updateAmbulanceMarkerFromPos(_simAmbulancePos!);
+      });
+    });
   }
+
+  void _updateAmbulanceMarkerFromPos(LatLng pos) {
+    setState(() {
+      _markers.removeWhere((m) => m.markerId.value == 'ambulance_unit');
+      _markers.add(Marker(
+        markerId: const MarkerId('ambulance_unit'),
+        position: pos,
+        icon: _ambIcon ?? BitmapDescriptor.defaultMarker,
+        infoWindow: const InfoWindow(title: 'AMBULANCE'),
+      ));
+    });
+  }
+
+  void _updateAmbulanceMarker(Map<String, dynamic>? alertData) {
+    if (alertData == null) {
+      setState(() {
+        _markers.removeWhere((m) => m.markerId.value == 'ambulance_unit');
+      });
+      return;
+    }
+
+    try {
+      final lat = double.tryParse(alertData['ambulanceLat'] ?? '');
+      final lon = double.tryParse(alertData['ambulanceLon'] ?? '');
+
+      if (lat != null && lon != null) {
+        setState(() {
+          _markers.removeWhere((m) => m.markerId.value == 'ambulance_unit');
+          _markers.add(Marker(
+            markerId: const MarkerId('ambulance_unit'),
+            position: LatLng(lat, lon),
+            icon: _ambIcon ?? BitmapDescriptor.defaultMarker,
+            infoWindow: const InfoWindow(title: 'AMBULANCE'),
+          ));
+        });
+      }
+    } catch (e) {
+      debugPrint('Error updating ambulance marker: $e');
+    }
+  }
+
 
   @override
   Widget build(BuildContext context) {
     final alertProv = context.watch<AlertProvider>();
+    
+    // Check for changes in alert state to update markers
+    if (alertProv.hasActiveAlert) {
+      _updateAmbulanceMarker(alertProv.currentAlert);
+    } else {
+      _updateAmbulanceMarker(null);
+    }
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F0F1A),
       body: Stack(
         children: [
           // ── Map background ─────────────────────────────────────────────
-          const GoogleMap(
-            initialCameraPosition: CameraPosition(
+          GoogleMap(
+            initialCameraPosition: const CameraPosition(
               target: LatLng(19.0760, 72.8777),
               zoom: 14,
             ),
+            onMapCreated: (ctrl) {
+              _mapController = ctrl;
+              _startLocationTracking();
+            },
+            markers: _markers,
             myLocationEnabled: true,
+            myLocationButtonEnabled: true,
             mapType: MapType.normal,
           ),
 
@@ -216,6 +376,19 @@ class _CivilianHomeScreenState extends State<CivilianHomeScreen>
                   ),
                 ],
               ),
+            ),
+          ),
+
+          // ── Locate Me Button ───────────────────────────────────────────
+          Positioned(
+            bottom: alertProv.hasActiveAlert ? 220 : 30,
+            right: 16,
+            child: FloatingActionButton(
+              heroTag: 'locate_me_civilian',
+              mini: true,
+              backgroundColor: const Color(0xFF16213E),
+              child: const Icon(Icons.my_location, color: Color(0xFFFF6F00)),
+              onPressed: () => _startLocationTracking(),
             ),
           ),
 

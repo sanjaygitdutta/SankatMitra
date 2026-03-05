@@ -20,10 +20,12 @@ class BedrockService:
             return self._get_fallback_alerts(direction, eta_seconds)
 
         prompt = (
-            f"Generate a concise emergency alert for a civilian vehicle to clear the path for an ambulance. "
+            f"Generate a concise, life-saving emergency alert for a civilian driver to clear the path for an approaching ambulance. "
             f"Direction: {direction.replace('_', ' ')}. ETA: {eta_seconds} seconds. "
-            f"Provide the output as a JSON object with keys 'en', 'hi', and 'bn' for English, Hindi, and Bengali respectively. "
-            f"Ensure the tone is urgent yet calm."
+            f"Provide the output as a JSON object with keys 'en', 'hi', and 'bn'. "
+            f"CRITICAL: The tone must be extremely urgent but natural for an emergency. "
+            f"For Hindi, use natural colloquialisms like 'Arre' (अरे) to grab attention. "
+            f"For Bengali, ensure the phrasing is direct and authoritative."
         )
 
         body = json.dumps({

@@ -37,7 +37,7 @@ class SankatMitraStack(Stack):
         # ── DynamoDB Tables ───────────────────────────────────────────────
         vehicle_table = dynamodb.Table(
             self, "VehicleRegistration",
-            table_name="SankatMitra-VehicleRegistration",
+            table_name="SankatMitra-VehicleRegistration-v2",
             partition_key=dynamodb.Attribute(name="vehicleId", type=dynamodb.AttributeType.STRING),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=RemovalPolicy.RETAIN,
@@ -51,7 +51,7 @@ class SankatMitraStack(Stack):
 
         location_table = dynamodb.Table(
             self, "LocationHistory",
-            table_name="SankatMitra-LocationHistory",
+            table_name="SankatMitra-LocationHistory-v2",
             partition_key=dynamodb.Attribute(name="vehicleId", type=dynamodb.AttributeType.STRING),
             sort_key=dynamodb.Attribute(name="timestamp", type=dynamodb.AttributeType.STRING),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
@@ -61,7 +61,7 @@ class SankatMitraStack(Stack):
 
         corridor_table = dynamodb.Table(
             self, "CorridorState",
-            table_name="SankatMitra-CorridorState",
+            table_name="SankatMitra-CorridorState-v2",
             partition_key=dynamodb.Attribute(name="corridorId", type=dynamodb.AttributeType.STRING),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             stream=dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
@@ -75,7 +75,7 @@ class SankatMitraStack(Stack):
 
         alert_table = dynamodb.Table(
             self, "AlertLog",
-            table_name="SankatMitra-AlertLog",
+            table_name="SankatMitra-AlertLog-v2",
             partition_key=dynamodb.Attribute(name="alertId", type=dynamodb.AttributeType.STRING),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             time_to_live_attribute="ttl",  # 24-hour TTL
@@ -123,15 +123,14 @@ class SankatMitraStack(Stack):
 
         # ── Shared Lambda environment ─────────────────────────────────────
         common_env = {
-            "AWS_REGION": self.region,
-            "DYNAMO_VEHICLE_TABLE": vehicle_table.table_name,
-            "DYNAMO_LOCATION_TABLE": location_table.table_name,
-            "DYNAMO_CORRIDOR_TABLE": corridor_table.table_name,
-            "DYNAMO_ALERT_TABLE": alert_table.table_name,
+            "DYNAMO_VEHICLE_TABLE": "SankatMitra-VehicleRegistration-v2",
+            "DYNAMO_LOCATION_TABLE": "SankatMitra-LocationHistory-v2",
+            "DYNAMO_CORRIDOR_TABLE": "SankatMitra-CorridorState-v2",
+            "DYNAMO_ALERT_TABLE": "SankatMitra-AlertLog-v2",
             "SNS_ALERT_TOPIC_ARN": alert_topic.topic_arn,
             "SNS_SPOOFING_TOPIC_ARN": spoofing_topic.topic_arn,
             "SAGEMAKER_ENDPOINT_NAME": "sankatmitra-rnn-route-predictor",
-            "ENVIRONMENT": "production",
+            "ENVIRONMENT": "development",
         }
 
         lambda_kwargs = dict(
@@ -146,37 +145,37 @@ class SankatMitraStack(Stack):
         # ── Lambda Functions ──────────────────────────────────────────────
         auth_fn = lambda_.Function(self, "AuthLambda",
             function_name="sankatmitra-auth-lambda",
-            handler="auth_lambda.handler.handler",
+            handler="lambdas.auth_lambda.handler.handler",
             code=lambda_.Code.from_asset("../../backend"),
             **lambda_kwargs)
 
         gps_fn = lambda_.Function(self, "GPSLambda",
             function_name="sankatmitra-gps-lambda",
-            handler="gps_lambda.handler.handler",
+            handler="lambdas.gps_lambda.handler.handler",
             code=lambda_.Code.from_asset("../../backend"),
             **lambda_kwargs)
 
         spoof_fn = lambda_.Function(self, "SpoofingLambda",
             function_name="sankatmitra-spoofing-lambda",
-            handler="spoofing_lambda.handler.handler",
+            handler="lambdas.spoofing_lambda.handler.handler",
             code=lambda_.Code.from_asset("../../backend"),
             **lambda_kwargs)
 
         route_fn = lambda_.Function(self, "RouteLambda",
             function_name="sankatmitra-route-lambda",
-            handler="route_lambda.handler.handler",
+            handler="lambdas.route_lambda.handler.handler",
             code=lambda_.Code.from_asset("../../backend"),
             **lambda_kwargs)
 
         alert_fn = lambda_.Function(self, "AlertLambda",
             function_name="sankatmitra-alert-lambda",
-            handler="alert_lambda.handler.handler",
+            handler="lambdas.alert_lambda.handler.handler",
             code=lambda_.Code.from_asset("../../backend"),
             **lambda_kwargs)
 
         corridor_fn = lambda_.Function(self, "CorridorLambda",
             function_name="sankatmitra-corridor-lambda",
-            handler="corridor_lambda.handler.handler",
+            handler="lambdas.corridor_lambda.handler.handler",
             code=lambda_.Code.from_asset("../../backend"),
             memory_size=1024,  # More memory for orchestration
             **{k: v for k, v in lambda_kwargs.items() if k != "memory_size"})
@@ -197,22 +196,25 @@ class SankatMitraStack(Stack):
             ),
         )
 
+        resource_cache = {}
+
         def add_route(resource_path: str, fn: lambda_.Function,
                       methods: list[str] = None, auth: bool = True):
             parts = resource_path.strip("/").split("/")
             resource = api.root
+            path_key = ""
             for part in parts:
-                existing = next(
-                    (c for c in resource.node.children
-                     if hasattr(c, "path_part") and c.path_part == part), None
-                )
-                resource = existing or resource.add_resource(part)
+                path_key += f"/{part}"
+                if path_key not in resource_cache:
+                    resource_cache[path_key] = resource.add_resource(part)
+                resource = resource_cache[path_key]
+
             for method in (methods or ["POST"]):
                 resource.add_method(
                     method,
                     apigw.LambdaIntegration(fn),
                     authorization_type=apigw.AuthorizationType.NONE if not auth
-                    else apigw.AuthorizationType.NONE,  # Replace with Cognito in prod
+                    else apigw.AuthorizationType.NONE,
                 )
 
         # Auth routes (no auth required)
@@ -257,7 +259,10 @@ class SankatMitraStack(Stack):
 app = cdk.App()
 SankatMitraStack(
     app, "SankatMitraStack",
-    env=cdk.Environment(region="ap-south-1"),  # Mumbai – Indian data residency
+    env=cdk.Environment(
+        account="281375955854",
+        region="ap-south-1"
+    ),
     description="SankatMitra Emergency Corridor System",
 )
 app.synth()

@@ -1,14 +1,48 @@
 """
-SankatMitra – Shared Pydantic Data Models
-Used across all Lambda functions.
+SankatMitra – Shared Data Models (Pydantic-free for Lambda compatibility)
 """
 from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Any
 
-from pydantic import BaseModel, Field
+
+# ---------------------------------------------------------------------------
+# Base Model Simulation
+# ---------------------------------------------------------------------------
+
+class BaseModel:
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+    
+    def model_dump(self, by_alias=False, exclude_none=False):
+        # Basic recursive dict conversion
+        result = {}
+        for k, v in self.__dict__.items():
+            if v is None and exclude_none:
+                continue
+            if hasattr(v, 'model_dump'):
+                result[k] = v.model_dump()
+            elif isinstance(v, list):
+                result[k] = [i.model_dump() if hasattr(i, 'model_dump') else i for i in v]
+            elif isinstance(v, Enum):
+                result[k] = v.value
+            else:
+                result[k] = v
+        return result
+
+    @classmethod
+    def model_validate(cls, obj):
+        if isinstance(obj, cls):
+            return obj
+        if isinstance(obj, dict):
+            return cls(**obj)
+        return obj
+
+    def dict(self):
+        return self.model_dump()
 
 
 # ---------------------------------------------------------------------------
@@ -65,8 +99,8 @@ class DeliveryStatus(str, Enum):
 
 class SpoofingFlagType(str, Enum):
     IMPOSSIBLE_SPEED = "IMPOSSIBLE_SPEED"
-    SIGNAL_ANOMALY = "SIGNAL_ANOMALY"
     LOCATION_JUMP = "LOCATION_JUMP"
+    SIGNAL_ANOMALY = "SIGNAL_ANOMALY"
     CELL_MISMATCH = "CELL_MISMATCH"
 
 
@@ -74,235 +108,165 @@ class Severity(str, Enum):
     LOW = "LOW"
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
 
 
 class SpoofingRecommendation(str, Enum):
     ACCEPT = "ACCEPT"
-    REJECT = "REJECT"
     REVIEW = "REVIEW"
-
-
-class MissionStatus(str, Enum):
-    IN_PROGRESS = "IN_PROGRESS"
-    COMPLETED = "COMPLETED"
-    ABORTED = "ABORTED"
-
-
-class TrafficEventType(str, Enum):
-    ACCIDENT = "ACCIDENT"
-    CONSTRUCTION = "CONSTRUCTION"
-    EVENT = "EVENT"
-    CLOSURE = "CLOSURE"
+    REJECT = "REJECT"
 
 
 # ---------------------------------------------------------------------------
-# Core Geographic Models
+# Core Models
 # ---------------------------------------------------------------------------
 
 class GPSCoordinate(BaseModel):
-    latitude: float = Field(..., ge=-90, le=90, description="Latitude in degrees")
-    longitude: float = Field(..., ge=-180, le=180, description="Longitude in degrees")
-    accuracy: float = Field(default=10.0, ge=0, description="Accuracy in metres")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-    speed: Optional[float] = Field(default=None, ge=0, description="Speed in m/s")
-    heading: Optional[float] = Field(default=None, ge=0, lt=360, description="Heading in degrees")
+    def __init__(self, latitude=0.0, longitude=0.0, accuracy=10.0, timestamp=None, speed=None, heading=None, **kwargs):
+        self.latitude = float(latitude)
+        self.longitude = float(longitude)
+        self.accuracy = float(accuracy)
+        self.timestamp = timestamp or datetime.utcnow().isoformat()
+        self.speed = float(speed) if speed is not None else None
+        self.heading = float(heading) if heading is not None else None
+        super().__init__(**kwargs)
 
-
-class CellTowerInfo(BaseModel):
-    tower_id: str
-    latitude: float
-    longitude: float
-    signal_strength: float  # dBm
-
-
-class GPSData(BaseModel):
-    coordinate: GPSCoordinate
-    satellite_count: int = Field(ge=0)
-    signal_strength: float
-    cell_tower_data: Optional[List[CellTowerInfo]] = None
-
-
-class VehicleLocation(BaseModel):
-    vehicle_id: str
-    coordinate: GPSCoordinate
-    signal_quality: SignalQuality
-    last_update: datetime
-
-
-# ---------------------------------------------------------------------------
-# Authentication Models
-# ---------------------------------------------------------------------------
 
 class Credentials(BaseModel):
-    vehicle_id: str
-    registration_number: str
-    agency_id: str
-    digital_signature: str
+    def __init__(self, vehicleId=None, registrationNumber=None, agencyId=None, digitalSignature=None, **kwargs):
+        self.vehicle_id = vehicleId or kwargs.get("vehicle_id")
+        self.registration_number = registrationNumber or kwargs.get("registration_number")
+        self.agency_id = agencyId or kwargs.get("agency_id")
+        self.digital_signature = digitalSignature or kwargs.get("digital_signature")
+        super().__init__(**kwargs)
 
 
 class AuthResult(BaseModel):
-    success: bool
-    token: Optional[str] = None
-    vehicle_type: str = "AMBULANCE"
-    expires_at: Optional[datetime] = None
-    error_code: Optional[str] = None
+    def __init__(self, success=False, token=None, vehicle_type="AMBULANCE", expires_at=None, error_code=None, **kwargs):
+        self.success = success
+        self.token = token
+        self.vehicle_type = vehicle_type
+        self.expires_at = expires_at
+        self.error_code = error_code
+        super().__init__(**kwargs)
 
 
 class TokenValidation(BaseModel):
-    valid: bool
-    vehicle_id: Optional[str] = None
-    expires_at: Optional[datetime] = None
-    error: Optional[str] = None
-
-
-class VehicleRegistration(BaseModel):
-    vehicle_id: str
-    registration_number: str
-    vehicle_type: str = "AMBULANCE"
-    agency_id: str
-    agency_name: str
-    state: str
-    district: str
-    registered_at: datetime
-    status: VehicleStatus
-    last_authentication: Optional[datetime] = None
-
-
-# ---------------------------------------------------------------------------
-# Traffic & Route Models
-# ---------------------------------------------------------------------------
-
-class TrafficSegment(BaseModel):
-    start_point: GPSCoordinate
-    end_point: GPSCoordinate
-    congestion_level: CongestionLevel
-    average_speed: float  # km/h
-
-
-class TrafficEvent(BaseModel):
-    event_type: TrafficEventType
-    location: GPSCoordinate
-    impact: Severity
-    start_time: datetime
-    end_time: Optional[datetime] = None
+    def __init__(self, valid=False, vehicle_id=None, expires_at=None, error=None, **kwargs):
+        self.valid = valid
+        self.vehicle_id = vehicle_id
+        self.expires_at = expires_at
+        self.error = error
+        super().__init__(**kwargs)
 
 
 class RouteRequest(BaseModel):
-    vehicle_id: str
-    current_location: GPSCoordinate
-    destination: GPSCoordinate
-    vehicle_type: str = "AMBULANCE"
-    urgency_level: UrgencyLevel = UrgencyLevel.CRITICAL
+    def __init__(self, vehicle_id=None, current_location=None, destination=None, urgency_level="MEDIUM", **kwargs):
+        self.vehicle_id = vehicle_id
+        self.current_location = GPSCoordinate.model_validate(current_location) if current_location else None
+        self.destination = GPSCoordinate.model_validate(destination) if destination else None
+        self.urgency_level = UrgencyLevel(urgency_level) if isinstance(urgency_level, str) else urgency_level
+        super().__init__(**kwargs)
+
+
+class TrafficSegment(BaseModel):
+    def __init__(self, start_point=None, end_point=None, congestion_level="CLEAR", average_speed=40.0, **kwargs):
+        self.start_point = GPSCoordinate.model_validate(start_point) if start_point else None
+        self.end_point = GPSCoordinate.model_validate(end_point) if end_point else None
+        self.congestion_level = CongestionLevel(congestion_level) if isinstance(congestion_level, str) else congestion_level
+        self.average_speed = average_speed
+        super().__init__(**kwargs)
 
 
 class PredictedRoute(BaseModel):
-    route_id: str
-    waypoints: List[GPSCoordinate]
-    estimated_duration: float  # seconds
-    estimated_arrival: datetime
-    traffic_conditions: List[TrafficSegment] = []
-    confidence: float = Field(ge=0, le=1)
+    def __init__(self, route_id=None, waypoints=None, estimated_duration=0, congestion_level="CLEAR", estimated_arrival=None, traffic_conditions=None, confidence=0.8, **kwargs):
+        self.route_id = route_id
+        self.waypoints = [GPSCoordinate.model_validate(w) for w in (waypoints or [])]
+        self.estimated_duration = estimated_duration
+        self.congestion_level = CongestionLevel(congestion_level) if isinstance(congestion_level, str) else congestion_level
+        self.estimated_arrival = estimated_arrival
+        self.traffic_conditions = [TrafficSegment.model_validate(s) for s in (traffic_conditions or [])]
+        self.confidence = confidence
+        super().__init__(**kwargs)
 
-
-# ---------------------------------------------------------------------------
-# Corridor Models
-# ---------------------------------------------------------------------------
 
 class CorridorRequest(BaseModel):
-    vehicle_id: str
-    destination: GPSCoordinate
-    urgency_level: UrgencyLevel = UrgencyLevel.CRITICAL
-    mission_type: str = "EMERGENCY"
-
-
-class CorridorUpdate(BaseModel):
-    new_route: Optional[PredictedRoute] = None
-    urgency_level: Optional[UrgencyLevel] = None
-    status: Optional[CorridorStatus] = None
+    def __init__(self, vehicle_id=None, currentLocation=None, destination=None, urgencyLevel="MEDIUM", missionType="EMERGENCY", **kwargs):
+        self.vehicle_id = vehicle_id
+        self.current_location = GPSCoordinate.model_validate(currentLocation or kwargs.get("current_location"))
+        self.destination = GPSCoordinate.model_validate(destination)
+        self.urgency_level = UrgencyLevel(urgencyLevel or kwargs.get("urgencyLevel", "MEDIUM"))
+        self.mission_type = missionType
+        super().__init__(**kwargs)
 
 
 class Corridor(BaseModel):
-    corridor_id: str
-    emergency_vehicle_id: str
-    route: PredictedRoute
-    alert_radius: float = 500.0  # metres
-    status: CorridorStatus = CorridorStatus.REQUESTED
-    created_at: datetime
-    updated_at: datetime
-    last_movement_at: Optional[datetime] = None
+    def __init__(self, corridorId=None, emergencyVehicleId=None, status="REQUESTED", route=None, **kwargs):
+        self.corridor_id = corridorId or kwargs.get("corridorId")
+        self.emergency_vehicle_id = emergencyVehicleId or kwargs.get("emergencyVehicleId")
+        self.status = CorridorStatus(status) if isinstance(status, str) else status
+        self.route = [GPSCoordinate.model_validate(w) for w in (route or [])]
+        self.destination = GPSCoordinate.model_validate(kwargs.get("destination")) if kwargs.get("destination") else None
+        super().__init__(**kwargs)
 
 
-# ---------------------------------------------------------------------------
-# Alert Models
-# ---------------------------------------------------------------------------
+class GPSData(BaseModel):
+    def __init__(self, coordinate=None, satellite_count=8, signal_strength=-80.0, cell_tower_data=None, **kwargs):
+        self.coordinate = GPSCoordinate.model_validate(coordinate) if coordinate else None
+        self.satellite_count = satellite_count
+        self.signal_strength = signal_strength
+        self.cell_tower_data = cell_tower_data
+        super().__init__(**kwargs)
 
-class Alert(BaseModel):
-    alert_id: str
-    vehicle_id: str
-    emergency_vehicle_type: str = "AMBULANCE"
-    direction: AlertDirection
-    estimated_arrival: float  # seconds
-    route_visualization: Optional[str] = None  # GeoJSON string
-    corridor_id: str
-
-
-class AlertResult(BaseModel):
-    total_sent: int
-    successful: int
-    failed: int
-    delivery_time_ms: float
-
-
-class AlertLog(BaseModel):
-    alert_id: str
-    corridor_id: str
-    recipient_vehicle_id: str
-    sent_at: datetime
-    delivered_at: Optional[datetime] = None
-    read_at: Optional[datetime] = None
-    delivery_status: DeliveryStatus = DeliveryStatus.SENT
-    failure_reason: Optional[str] = None
-
-
-# ---------------------------------------------------------------------------
-# Spoofing Models
-# ---------------------------------------------------------------------------
 
 class SpoofingFlag(BaseModel):
-    type: SpoofingFlagType
-    severity: Severity
-    details: str
+    def __init__(self, type=None, severity="LOW", details="", **kwargs):
+        self.type = SpoofingFlagType(type) if isinstance(type, str) else type
+        self.severity = Severity(severity) if isinstance(severity, str) else severity
+        self.details = details
+        super().__init__(**kwargs)
 
 
 class ValidationResult(BaseModel):
-    is_valid: bool
-    confidence_score: float = Field(ge=0, le=1)
-    flags: List[SpoofingFlag] = []
-    recommendation: SpoofingRecommendation
+    def __init__(self, is_valid=True, confidence_score=1.0, flags=None, recommendation="ACCEPT", **kwargs):
+        self.is_valid = is_valid
+        self.confidence_score = confidence_score
+        self.flags = [SpoofingFlag.model_validate(f) for f in (flags or [])]
+        self.recommendation = SpoofingRecommendation(recommendation) if isinstance(recommendation, str) else recommendation
+        super().__init__(**kwargs)
 
 
-class SpoofingEvidence(BaseModel):
-    vehicle_id: str
-    gps_data: GPSData
-    flags: List[SpoofingFlag]
-    confidence_score: float
-    detected_at: datetime
+class AlertLog(BaseModel):
+    def __init__(self, alert_id=None, corridor_id=None, recipient_vehicle_id=None, sent_at=None, delivery_status="SENT", **kwargs):
+        self.alert_id = alert_id
+        self.corridor_id = corridor_id
+        self.recipient_vehicle_id = recipient_vehicle_id
+        self.sent_at = sent_at or datetime.utcnow().isoformat()
+        self.delivery_status = DeliveryStatus(delivery_status) if isinstance(delivery_status, str) else delivery_status
+        super().__init__(**kwargs)
 
 
-# ---------------------------------------------------------------------------
-# Mission Record
-# ---------------------------------------------------------------------------
+class AlertResult(BaseModel):
+    def __init__(self, total_sent=0, successful=0, failed=0, delivery_time_ms=0.0, **kwargs):
+        self.total_sent = total_sent
+        self.successful = successful
+        self.failed = failed
+        self.delivery_time_ms = delivery_time_ms
+        super().__init__(**kwargs)
 
-class MissionRecord(BaseModel):
-    mission_id: str
-    vehicle_id: str
-    corridor_id: str
-    start_time: datetime
-    end_time: Optional[datetime] = None
-    start_location: GPSCoordinate
-    destination: GPSCoordinate
-    actual_route: List[GPSCoordinate] = []
-    distance_traveled: float = 0.0  # km
-    average_speed: float = 0.0  # km/h
-    alerts_sent: int = 0
-    status: MissionStatus = MissionStatus.IN_PROGRESS
+# Additional stubs / less critical models
+class CellTowerInfo(BaseModel): pass
+class VehicleLocation(BaseModel): pass
+class TrafficEvent(BaseModel): pass
+class CorridorUpdate(BaseModel): pass
+class Alert(BaseModel): pass
+class SpoofingEvidence(BaseModel): pass
+class MissionRecord(BaseModel): pass
+class VehicleRegistration(BaseModel):
+    def __init__(self, vehicle_id=None, registration_number=None, vehicle_type="AMBULANCE", agency_id=None, agency_name=None, **kwargs):
+        self.vehicle_id = vehicle_id
+        self.registration_number = registration_number
+        self.vehicle_type = vehicle_type
+        self.agency_id = agency_id
+        self.agency_name = agency_name
+        super().__init__(**kwargs)

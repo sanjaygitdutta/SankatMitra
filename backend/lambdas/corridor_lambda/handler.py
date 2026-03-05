@@ -24,8 +24,8 @@ if TYPE_CHECKING:
 import boto3
 from botocore.exceptions import ClientError
 
-from backend.shared.config import get_settings
-from backend.shared.models import (
+from shared.config import get_settings
+from shared.models import (
     Corridor,
     CorridorRequest,
     CorridorStatus,
@@ -33,7 +33,7 @@ from backend.shared.models import (
     GPSCoordinate,
     UrgencyLevel,
 )
-from backend.shared.security import token_from_header, verify_token
+from shared.security import token_from_header, verify_token
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -157,29 +157,51 @@ def _handle_activate(body: Dict, vehicle_id: str) -> Dict:
     corridor_data["updatedAt"] = datetime.now(timezone.utc).isoformat()
 
     # Invoke route prediction Lambda
+    route_result = {}
     try:
         route_result = _invoke_lambda("sankatmitra-route-lambda", {
             "path": "/route/predict",
             "httpMethod": "POST",
             "body": json.dumps({
                 "vehicle_id": vehicle_id,
-                "current_location": body.get("currentLocation", {}),
+                "currentLocation": body.get("currentLocation", {}),
                 "destination": {"latitude": req.destination.latitude, "longitude": req.destination.longitude},
-                "urgency_level": req.urgency_level.value,
+                "urgencyLevel": req.urgency_level.value,
             }),
         })
-        corridor_data["routeId"] = route_result.get("route_id")
-        corridor_data["estimatedDuration"] = route_result.get("estimated_duration")
-        corridor_data["status"] = CorridorStatus.ROUTE_CALCULATED.value
-        corridor_data["updatedAt"] = datetime.now(timezone.utc).isoformat()
     except Exception as e:
         logger.error(f"Route prediction failed: {e}")
-        corridor_data["status"] = CorridorStatus.ROUTE_CALCULATED.value  # Proceed with fallback
+        # Fallback will be handled below if route_result is empty
+    
+    # Fallback: If no route from ML service, generate direct waypoints
+    route_waypoints = route_result.get("waypoints", [])
+    if not route_waypoints:
+        from shared.geo_utils import haversine_distance
+        dist = haversine_distance(
+            GPSCoordinate.model_validate(body.get("currentLocation", {})),
+            req.destination
+        )
+        # Simple 2-point fallback route
+        route_waypoints = [
+            body.get("currentLocation", {}),
+            {"latitude": req.destination.latitude, "longitude": req.destination.longitude}
+        ]
+        route_result["estimated_duration"] = int((dist / 10) + 60) # ~36km/h avg
+        logger.info(f"Using fallback linear route for corridor {corridor_id}")
+
+    corridor_data["routeId"] = route_result.get("route_id", f"fb-{corridor_id}")
+    corridor_data["estimatedDuration"] = route_result.get("estimated_duration")
+    corridor_data["status"] = CorridorStatus.ROUTE_CALCULATED.value
+    corridor_data["updatedAt"] = datetime.now(timezone.utc).isoformat()
 
     # Transition: ROUTE_CALCULATED → ACTIVE
     corridor_data["status"] = CorridorStatus.ACTIVE.value
     corridor_data["activatedAt"] = datetime.now(timezone.utc).isoformat()
     corridor_data["updatedAt"] = datetime.now(timezone.utc).isoformat()
+    
+    # Include route waypoints in the saved data and response
+    corridor_data["route"] = route_waypoints
+    
     _save_corridor(corridor_id, corridor_data)
 
     # Trigger alert distribution asynchronously
@@ -192,7 +214,7 @@ def _handle_activate(body: Dict, vehicle_id: str) -> Dict:
                 "httpMethod": "POST",
                 "body": json.dumps({
                     "corridorId": corridor_id,
-                    "routeWaypoints": route_result.get("waypoints", []),
+                    "routeWaypoints": route_waypoints,
                     "etaSeconds": route_result.get("estimated_duration", 300),
                     "ambulanceLocation": body.get("currentLocation", {}),
                 }),
@@ -201,7 +223,7 @@ def _handle_activate(body: Dict, vehicle_id: str) -> Dict:
     except Exception as e:
         logger.warning(f"Alert dispatch failed (non-fatal): {e}")
 
-    # Audit log (Property 36, 56)
+    # Audit log
     logger.info(json.dumps({
         "event": "corridor_activated",
         "corridorId": corridor_id,
@@ -210,13 +232,22 @@ def _handle_activate(body: Dict, vehicle_id: str) -> Dict:
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }))
 
+    # Return full data expected by frontend (Corridor model in Flutter)
     return {
         "statusCode": 201,
         "body": json.dumps({
             "corridorId": corridor_id,
+            "vehicleId": vehicle_id,
             "status": CorridorStatus.ACTIVE.value,
+            "urgencyLevel": req.urgency_level.value,
+            "missionType": req.mission_type,
+            "route": route_waypoints,
+            "destination": {
+                "latitude": req.destination.latitude,
+                "longitude": req.destination.longitude
+            },
+            "startTime": corridor_data["activatedAt"],
             "estimatedDuration": corridor_data.get("estimatedDuration"),
-            "createdAt": corridor_data["createdAt"],
         }),
     }
 
@@ -316,6 +347,21 @@ def _handle_list() -> Dict:
 # ---------------------------------------------------------------------------
 
 def handler(event: Dict, context: Any) -> Dict:
+    try:
+        return _internal_handler(event, context)
+    except Exception as e:
+        import traceback
+        logger.error(f"FATAL HANDLER ERROR: {e}\n{traceback.format_exc()}")
+        return {
+            "statusCode": 500, 
+            "body": json.dumps({"error": "Internal server error", "details": str(e)}),
+            "headers": {
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*"
+            }
+        }
+
+def _internal_handler(event: Dict, context: Any) -> Dict:
     path = event.get("path", "")
     method = event.get("httpMethod", "GET")
     path_params = event.get("pathParameters") or {}
@@ -350,5 +396,10 @@ def handler(event: Dict, context: Any) -> Dict:
     else:
         resp = {"statusCode": 404, "body": json.dumps({"error": "Not found"})}
 
-    resp["headers"] = {"Content-Type": "application/json"}
+    resp["headers"] = {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST,GET,OPTIONS,DELETE,PATCH",
+        "Access-Control-Allow-Headers": "Content-Type,Authorization"
+    }
     return resp

@@ -18,8 +18,8 @@ if TYPE_CHECKING:
     from mypy_boto3_dynamodb.service_resource import Table
 
 import boto3
-from backend.shared.config import get_settings
-from backend.shared.models import (
+from shared.config import get_settings
+from shared.models import (
     GPSCoordinate,
     PredictedRoute,
     RouteRequest,
@@ -27,7 +27,7 @@ from backend.shared.models import (
     CongestionLevel,
     UrgencyLevel,
 )
-from backend.shared.geo_utils import haversine_distance, bearing_degrees
+from shared.geo_utils import haversine_distance, bearing_degrees
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -322,5 +322,10 @@ def handler(event: Dict, context: Any) -> Dict:
     else:
         resp = {"statusCode": 404, "body": json.dumps({"error": "Not found"})}
 
-    resp["headers"] = {"Content-Type": "application/json"}
+    resp["headers"] = {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST,GET,OPTIONS,DELETE,PATCH",
+        "Access-Control-Allow-Headers": "Content-Type,Authorization"
+    }
     return resp

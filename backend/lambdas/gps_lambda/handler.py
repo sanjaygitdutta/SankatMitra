@@ -20,9 +20,9 @@ if TYPE_CHECKING:
 import boto3
 from botocore.exceptions import ClientError
 
-from backend.shared.config import get_settings
-from backend.shared.models import GPSCoordinate, GPSData, SignalQuality, VehicleLocation
-from backend.shared.anomaly_detector import validate_gps_signal
+from shared.config import get_settings
+from shared.models import GPSCoordinate, GPSData, SignalQuality, VehicleLocation
+from shared.anomaly_detector import validate_gps_signal
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -196,7 +196,12 @@ def handler(event: Dict, context: Any) -> Dict:
     except json.JSONDecodeError:
         body = {}
 
-    headers = {"Content-Type": "application/json"}
+    headers = {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST,GET,OPTIONS,DELETE,PATCH",
+        "Access-Control-Allow-Headers": "Content-Type,Authorization"
+    }
 
     if path.endswith("/update") and method == "POST":
         resp = _handle_update(body)

@@ -1,0 +1,20 @@
+{
+    "hosting": {
+        "public": "web_dist",
+        "ignore": [
+            "firebase.json",
+            "**/.*",
+            "**/node_modules/**"
+        ],
+        "rewrites": [
+            {
+                "source": "/ambulance/**",
+                "destination": "/ambulance/index.html"
+            },
+            {
+                "source": "/civilian/**",
+                "destination": "/civilian/index.html"
+            }
+        ]
+    }
+}

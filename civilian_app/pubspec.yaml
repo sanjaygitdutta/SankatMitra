@@ -12,6 +12,7 @@ dependencies:
   firebase_core: ^2.24.2
   firebase_messaging: ^14.7.10
   google_maps_flutter: ^2.5.0
+  cupertino_icons: ^1.0.6
   flutter_tts: ^4.0.2
   geolocator: ^11.0.0
   flutter_local_notifications: ^16.0.0

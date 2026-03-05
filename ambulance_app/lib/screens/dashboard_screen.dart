@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:provider/provider.dart';
+import 'package:geolocator/geolocator.dart';
 import '../providers/corridor_provider.dart';
 import '../providers/auth_provider.dart';
 import '../widgets/corridor_info_card.dart';
@@ -15,8 +17,85 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  // ignore: unused_field
   GoogleMapController? _mapController;
+  final Set<Marker> _markers = {};
+  StreamSubscription<Position>? _positionSubscription;
+  BitmapDescriptor? _ambIcon;
+
+  @override
+  void initState() {
+    super.initState();
+    _createEmojiIcons();
+  }
+
+  Future<void> _createEmojiIcons() async {
+    // ignore: deprecated_member_use
+    _ambIcon = await BitmapDescriptor.fromAssetImage(
+      const ImageConfiguration(size: Size(48, 48)),
+      'assets/images/ambulance_marker.png',
+    );
+    if (mounted) setState(() {});
+  }
+
+
+  void _startLocationTracking() async {
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    
+    if (permission == LocationPermission.whileInUse || 
+        permission == LocationPermission.always) {
+      
+      // Get initial position immediately
+      final initial = await Geolocator.getCurrentPosition();
+      _moveToLocation(initial.latitude, initial.longitude);
+
+      _positionSubscription = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: 5,
+        ),
+      ).listen((Position position) {
+        if (!mounted) return;
+        setState(() {
+          _markers.removeWhere((m) => m.markerId.value == 'my_ambulance');
+          _markers.add(Marker(
+            markerId: const MarkerId('my_ambulance'),
+            position: LatLng(position.latitude, position.longitude),
+            icon: _ambIcon ?? BitmapDescriptor.defaultMarker,
+            infoWindow: const InfoWindow(title: 'AMBULANCE (ME)'),
+          ));
+        });
+        
+        _moveToLocation(position.latitude, position.longitude);
+      });
+    } else if (permission == LocationPermission.deniedForever) {
+      _showPermissionError();
+    }
+  }
+
+  void _showPermissionError() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Location permission is permanently denied. Please enable it in browser settings.'),
+        backgroundColor: Colors.red,
+      ),
+    );
+  }
+
+  void _moveToLocation(double lat, double lon) {
+    _mapController?.animateCamera(
+      CameraUpdate.newLatLngZoom(LatLng(lat, lon), 15),
+    );
+  }
+
+  @override
+  void dispose() {
+    _positionSubscription?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -71,12 +150,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
               target: LatLng(19.0760, 72.8777),
               zoom: 14,
             ),
-            onMapCreated: (ctrl) => _mapController = ctrl,
-            markers: _buildMarkers(corridorProv),
+            onMapCreated: (ctrl) {
+              _mapController = ctrl;
+              _startLocationTracking();
+            },
+            markers: _markers.union(_buildMarkers(corridorProv)),
             polylines: _buildPolylines(corridorProv),
             myLocationEnabled: true,
             myLocationButtonEnabled: true,
             mapType: MapType.normal,
+          ),
+
+          // ── Locate Me Button ───────────────────────────────────────────
+          Positioned(
+            top: 100,
+            right: 16,
+            child: FloatingActionButton(
+              heroTag: 'locate_me_ambulance',
+              mini: true,
+              backgroundColor: const Color(0xFF16213E),
+              child: const Icon(Icons.my_location, color: Color(0xFFE53935)),
+              onPressed: () => _startLocationTracking(),
+            ),
           ),
 
           // ── Offline banner ──────────────────────────────────────────────

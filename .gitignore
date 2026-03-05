@@ -17,6 +17,8 @@
 .pub-cache/
 .pub/
 build/
+web_dist/
+node_modules/
 ios/Flutter/Generated.xcconfig
 scripts/config.sh
 
@@ -32,6 +34,8 @@ __pycache__/
 .vscode/
 .idea/
 .DS_Store
+cdk.out/
+cdk.context.json
 
 # Temporary Files
 /tmp/

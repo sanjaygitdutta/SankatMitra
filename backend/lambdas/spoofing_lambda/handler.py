@@ -17,9 +17,9 @@ if TYPE_CHECKING:
 
 import boto3
 
-from backend.shared.config import get_settings
-from backend.shared.models import GPSCoordinate, GPSData, CellTowerInfo, SpoofingEvidence
-from backend.shared.anomaly_detector import validate_gps_signal
+from shared.config import get_settings
+from shared.models import GPSCoordinate, GPSData, CellTowerInfo, SpoofingEvidence
+from shared.anomaly_detector import validate_gps_signal
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -150,5 +150,10 @@ def handler(event: Dict, context: Any) -> Dict:
     else:
         resp = {"statusCode": 404, "body": json.dumps({"error": "Not found"})}
 
-    resp["headers"] = {"Content-Type": "application/json"}
+    resp["headers"] = {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST,GET,OPTIONS,DELETE,PATCH",
+        "Access-Control-Allow-Headers": "Content-Type,Authorization"
+    }
     return resp

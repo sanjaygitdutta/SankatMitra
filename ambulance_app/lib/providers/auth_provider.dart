@@ -15,7 +15,7 @@ class AuthProvider extends ChangeNotifier {
 
   final Dio _dio = Dio(BaseOptions(
     baseUrl: const String.fromEnvironment('API_BASE_URL',
-        defaultValue: 'https://api.sankatmitra.in/prod'),
+        defaultValue: 'https://r0bh4n62b6.execute-api.ap-south-1.amazonaws.com/prod/'),
     connectTimeout: const Duration(seconds: 5),
   ));
 
