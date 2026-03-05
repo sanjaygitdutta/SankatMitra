@@ -32,7 +32,7 @@
 ## 📁 Project Structure
 
 ```
-SANKATMITRAA/
+SankatMitra/
 ├── ambulance_app/          # Flutter app for ambulance operators
 ├── civilian_app/           # Flutter app for civilian drivers
 ├── backend/
