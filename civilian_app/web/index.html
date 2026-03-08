@@ -33,7 +33,30 @@
 
   <title>sankatmitra_civilian</title>
   <link rel="manifest" href="manifest.json">
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyD1D9hdyVyoSkd9aHewKsoQ9imv0Xcc9vg"></script>
+  <script src="https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_MAPS_API_KEY_HERE"></script>
+  <script>
+    // SankatMitra: Multilingual Web Speech API helper
+    // Accepts JSON strings because Dart List<String> doesn't auto-convert to JS array.
+    function smSpeak(textsJson, langsJson) {
+      if (!window.speechSynthesis) return;
+      window.speechSynthesis.cancel();
+      try {
+        var texts = JSON.parse(textsJson);
+        var langs = JSON.parse(langsJson);
+        for (var i = 0; i < texts.length; i++) {
+          var u = new SpeechSynthesisUtterance(texts[i]);
+          u.lang = langs[i] || 'en-US';
+          u.rate = 0.85;
+          u.volume = 1.0;
+          u.pitch = 1.0;
+          window.speechSynthesis.speak(u);
+        }
+      } catch (e) { console.error('smSpeak error', e); }
+    }
+    function smCancelSpeech() {
+      if (window.speechSynthesis) window.speechSynthesis.cancel();
+    }
+  </script>
 </head>
 
 <body>

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' show sin, cos, sqrt, atan2, pi;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -7,101 +8,118 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:dio/dio.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'firebase_options.dart';
 import 'providers/alert_provider.dart';
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  
-  // Start the UI immediately so the user doesn't see a blank screen
-  runApp(const SankatMitraCivilianApp());
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+const String _apiBase = 'https://r0bh4n62b6.execute-api.ap-south-1.amazonaws.com/prod';
+const double _proximityThresholdMeters = 500.0;
+const Duration _pollInterval = Duration(seconds: 5);
 
-  // Initialize Firebase in the background
-  _initializeFirebase();
+// ---------------------------------------------------------------------------
+// Haversine distance
+// ---------------------------------------------------------------------------
+double _haversineMeters(double lat1, double lon1, double lat2, double lon2) {
+  const R = 6371000.0;
+  final dLat = (lat2 - lat1) * pi / 180;
+  final dLon = (lon2 - lon1) * pi / 180;
+  final a = sin(dLat / 2) * sin(dLat / 2) +
+      cos(lat1 * pi / 180) * cos(lat2 * pi / 180) *
+          sin(dLon / 2) * sin(dLon / 2);
+  return R * 2 * atan2(sqrt(a), sqrt(1 - a));
 }
 
-Future<void> _initializeFirebase() async {
+// ---------------------------------------------------------------------------
+// App entry point
+// ---------------------------------------------------------------------------
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const SankatMitraCivilianApp());
+  _initFirebaseOptional();
+}
+
+/// Firebase is optional — if permission is denied or Firebase fails, the app
+/// still works via the active corridor polling mechanism.
+Future<void> _initFirebaseOptional() async {
   try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-    
-    // Request notification permission
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
     final messaging = FirebaseMessaging.instance;
-    await messaging.requestPermission(alert: true, badge: true, sound: true);
-    
-    // Get FCM token for targeting
-    final token = await messaging.getToken();
-    debugPrint('FCM Token: $token');
-
-    // Setup message handlers
-    FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-
-    debugPrint('Firebase initialized successfully');
-    
-    // Start GPS heartbeat for civilians
-    _startCivilianGpsHeartbeat();
+    final settings = await messaging.requestPermission(alert: true, badge: true, sound: true);
+    if (settings.authorizationStatus == AuthorizationStatus.authorized) {
+      final token = await messaging.getToken();
+      debugPrint('FCM Token: $token');
+      FirebaseMessaging.onBackgroundMessage(_bgHandler);
+      _startGpsHeartbeat(token);
+    } else {
+      debugPrint('FCM permission denied – polling mode only');
+      _startGpsHeartbeat(null);
+    }
   } catch (e) {
-    debugPrint('Firebase background initialization failed: $e');
+    debugPrint('Firebase optional init failed: $e – polling mode only');
+    _startGpsHeartbeat(null);
   }
 }
 
-// Global background handler
 @pragma('vm:entry-point')
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+Future<void> _bgHandler(RemoteMessage msg) async {
   await Firebase.initializeApp();
-  debugPrint("Handling background message: ${message.messageId}");
 }
 
-void _handleForegroundMessage(RemoteMessage message) {
-  debugPrint("Foreground message received: ${message.data}");
-  // The AlertProvider will automatically hear this via a global state mechanism
-  // In this prototype, we'll use a simple static access or event bus
+/// Stable civilian ID persisted in browser storage.
+Future<String> _getCivilianId() async {
+  final prefs = await SharedPreferences.getInstance();
+  String? id = prefs.getString('civilian_id');
+  if (id == null) {
+    id = 'CIV-${DateTime.now().millisecondsSinceEpoch}';
+    await prefs.setString('civilian_id', id);
+  }
+  return id;
 }
 
-void _startCivilianGpsHeartbeat() {
+Future<void> _startGpsHeartbeat(String? fcmToken) async {
+  final id = await _getCivilianId();
+  final dio = Dio(BaseOptions(baseUrl: '$_apiBase/'));
   Geolocator.getPositionStream(
-    locationSettings: const LocationSettings(
-      accuracy: LocationAccuracy.medium,
-      distanceFilter: 20, // metres
-    ),
-  ).listen((position) async {
+    locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium, distanceFilter: 20),
+  ).listen((pos) async {
     try {
-      final dio = Dio(BaseOptions(baseUrl: 'https://r0bh4n62b6.execute-api.ap-south-1.amazonaws.com/prod/'));
-      await dio.post('/gps/update', data: {
-        'vehicleId': 'civilian_${position.timestamp.millisecondsSinceEpoch}', // Anonymous
+      await dio.post('gps/update', data: {
+        'vehicleId': id,
         'type': 'CIVILIAN',
+        'fcmToken': fcmToken ?? '',
         'coordinate': {
-          'latitude': position.latitude,
-          'longitude': position.longitude,
-          'accuracy': position.accuracy,
+          'latitude': pos.latitude,
+          'longitude': pos.longitude,
+          'accuracy': pos.accuracy,
           'timestamp': DateTime.now().toIso8601String(),
         },
+        'satelliteCount': 8,
+        'signalStrength': -75.0,
       });
     } catch (e) {
-      debugPrint('GPS heartbeart error: $e');
+      debugPrint('GPS heartbeat err: $e');
     }
   });
 }
 
+// ---------------------------------------------------------------------------
+// Root Widget
+// ---------------------------------------------------------------------------
 class SankatMitraCivilianApp extends StatelessWidget {
   const SankatMitraCivilianApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
-      providers: [
-        ChangeNotifierProvider(create: (_) => AlertProvider()),
-      ],
+      providers: [ChangeNotifierProvider(create: (_) => AlertProvider())],
       child: MaterialApp(
         title: 'SankatMitra',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFFFF6F00),
-            brightness: Brightness.dark,
-          ),
+              seedColor: const Color(0xFFFF6F00), brightness: Brightness.dark),
           useMaterial3: true,
         ),
         home: const CivilianHomeScreen(),
@@ -111,12 +129,10 @@ class SankatMitraCivilianApp extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Civilian Home Screen – full UI with map + alert overlay
+// Home Screen
 // ---------------------------------------------------------------------------
-
 class CivilianHomeScreen extends StatefulWidget {
   const CivilianHomeScreen({super.key});
-
   @override
   State<CivilianHomeScreen> createState() => _CivilianHomeScreenState();
 }
@@ -124,415 +140,449 @@ class CivilianHomeScreen extends StatefulWidget {
 class _CivilianHomeScreenState extends State<CivilianHomeScreen>
     with SingleTickerProviderStateMixin {
   GoogleMapController? _mapController;
-  late AnimationController _pulseController;
-  late Animation<double> _pulseAnimation;
+  late AnimationController _pulseCtrl;
+  late Animation<double> _pulseAnim;
   final Set<Marker> _markers = {};
-  StreamSubscription<Position>? _positionSubscription;
-  Timer? _simTimer;
-  LatLng? _simAmbulancePos;
+  StreamSubscription<Position>? _posSub;
+  Timer? _corridorPollTimer;
+
   BitmapDescriptor? _carIcon;
   BitmapDescriptor? _ambIcon;
+  LatLng? _myPos;
+  LatLng? _ambPos;
+  String? _activeCorridorId;
+
+  final Dio _dio = Dio(BaseOptions(
+    baseUrl: '$_apiBase/',
+    connectTimeout: const Duration(seconds: 5),
+    receiveTimeout: const Duration(seconds: 5),
+  ));
 
   @override
   void initState() {
     super.initState();
-    _pulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 800),
-    )..repeat(reverse: true);
-    _pulseAnimation = Tween<double>(begin: 0.85, end: 1.0).animate(
-      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
-    );
-    
-    // Create icons
-    _createEmojiIcons();
+    _pulseCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 800))
+      ..repeat(reverse: true);
+    _pulseAnim = Tween<double>(begin: 0.85, end: 1.0)
+        .animate(CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
 
-    // Initialize FCM
-    _setupFCM();
+    _loadIcons();
+    _startLocationTracking();
+    _startCorridorPolling(); // ← PRIMARY: polls every 5s, no FCM needed
   }
 
-  Future<void> _createEmojiIcons() async {
+  Future<void> _loadIcons() async {
     // ignore: deprecated_member_use
     _carIcon = await BitmapDescriptor.fromAssetImage(
-      const ImageConfiguration(size: Size(48, 48)),
-      'assets/images/car_marker.png',
-    );
+        const ImageConfiguration(size: Size(48, 48)), 'assets/images/car_marker.png');
     // ignore: deprecated_member_use
     _ambIcon = await BitmapDescriptor.fromAssetImage(
-      const ImageConfiguration(size: Size(48, 48)),
-      'assets/images/ambulance_marker.png',
-    );
+        const ImageConfiguration(size: Size(48, 48)), 'assets/images/ambulance_marker.png');
     if (mounted) setState(() {});
   }
 
-
-
-  void _moveToLocation(double lat, double lon) {
-    _mapController?.animateCamera(
-      CameraUpdate.newLatLngZoom(LatLng(lat, lon), 15),
-    );
+  // ── Active Corridor Polling (works without FCM) ──────────────────────────
+  void _startCorridorPolling() {
+    _corridorPollTimer?.cancel();
+    _corridorPollTimer = Timer.periodic(_pollInterval, (_) => _checkActiveCorridor());
+    // Also check immediately
+    Future.delayed(const Duration(seconds: 2), _checkActiveCorridor);
   }
 
-  void _startLocationTracking() async {
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-    
-    if (permission == LocationPermission.whileInUse || 
-        permission == LocationPermission.always) {
-      _positionSubscription = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          distanceFilter: 5,
-        ),
-      ).listen((Position position) {
-        if (!mounted) return;
-        setState(() {
-          _markers.removeWhere((m) => m.markerId.value == 'user_car');
-          _markers.add(Marker(
-            markerId: const MarkerId('user_car'),
-            position: LatLng(position.latitude, position.longitude),
-            icon: _carIcon ?? BitmapDescriptor.defaultMarker,
-            infoWindow: const InfoWindow(title: 'MY CAR'),
-          ));
-        });
-        
-        // Only auto-center on move if they haven't manually moved the map? 
-        // For now, let's keep it simple and follow.
-        _moveToLocation(position.latitude, position.longitude);
-      });
-    } else if (permission == LocationPermission.deniedForever) {
-      _showPermissionError();
-    }
-  }
+  Future<void> _checkActiveCorridor() async {
+    if (!mounted) return;
+    try {
+      final resp = await _dio.get('corridor/corridors',
+          options: Options(headers: {
+            // Public endpoint – no auth token needed
+            'Content-Type': 'application/json',
+          }));
 
-  void _showPermissionError() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Location permission is permanently denied. Please enable it in browser settings.'),
-        backgroundColor: Colors.red,
-      ),
-    );
-  }
+      final corridors = (resp.data?['corridors'] as List?) ?? [];
 
-  @override
-  void dispose() {
-    _pulseController.dispose();
-    _positionSubscription?.cancel();
-    _simTimer?.cancel();
-    super.dispose();
-  }
-
-
-  void _setupFCM() {
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      if (!mounted) return;
-      final alert = context.read<AlertProvider>();
-      alert.handleIncomingAlert(message.data);
-      _startAmbulanceSimulation(message.data);
-    });
-    // Background handler is already registered in _initializeFirebase
-  }
-
-  void _startAmbulanceSimulation(Map<String, dynamic> data) {
-    _simTimer?.cancel();
-    final lat = double.tryParse(data['ambulanceLat'] ?? '');
-    final lon = double.tryParse(data['ambulanceLon'] ?? '');
-    if (lat == null || lon == null) return;
-
-    _simAmbulancePos = LatLng(lat, lon);
-    
-    // Smoothly crawl towards the user over the next 60 seconds
-    _simTimer = Timer.periodic(const Duration(milliseconds: 1000), (timer) async {
-      if (_simAmbulancePos == null || !mounted) {
-        timer.cancel();
+      if (corridors.isEmpty) {
+        // No active corridors → clear any existing alert
+        if (_activeCorridorId != null) _clearAmbulance();
         return;
       }
 
-      final userPos = await Geolocator.getCurrentPosition();
-      setState(() {
-        // Move 1/60th of the distance each second
-        double newLat = _simAmbulancePos!.latitude + (userPos.latitude - _simAmbulancePos!.latitude) / 60;
-        double newLon = _simAmbulancePos!.longitude + (userPos.longitude - _simAmbulancePos!.longitude) / 60;
-        _simAmbulancePos = LatLng(newLat, newLon);
-        
-        _updateAmbulanceMarkerFromPos(_simAmbulancePos!);
-      });
+      for (final c in corridors) {
+        final corridorId = c['corridorId'] as String?;
+        final status = c['status'] as String? ?? '';
+        final ambLatStr = c['ambulanceLat'] as String?;
+        final ambLonStr = c['ambulanceLon'] as String?;
+        final vehicleId = c['emergencyVehicleId'] as String?;
+
+        // Guards: must be ACTIVE with valid GPS coords
+        if (status != 'ACTIVE') continue;
+        if (ambLatStr == null || ambLatStr.isEmpty || ambLatStr == 'None') continue;
+        if (ambLonStr == null || ambLonStr.isEmpty || ambLonStr == 'None') continue;
+
+        final ambLat = double.tryParse(ambLatStr);
+        final ambLon = double.tryParse(ambLonStr);
+        if (ambLat == null || ambLon == null) continue;
+
+        // ETA sanity check
+        final etaRaw = double.tryParse(c['estimatedDuration']?.toString() ?? '') ?? 0;
+        final etaSeconds = etaRaw > 0 ? etaRaw.toInt() : 60; // Default 60s if invalid
+
+        final ambPosition = LatLng(ambLat, ambLon);
+
+        // Check distance – only trigger if within 500m
+        if (_myPos != null) {
+          final dist = _haversineMeters(
+              _myPos!.latitude, _myPos!.longitude, ambLat, ambLon);
+          if (dist > _proximityThresholdMeters) {
+            if (corridorId == _activeCorridorId) _clearAmbulance();
+            continue;
+          }
+        }
+
+        // Within range → show ambulance marker
+        _setAmbulanceMarker(ambPosition);
+
+        // Trigger alert only for new corridor
+        if (corridorId != _activeCorridorId) {
+          _activeCorridorId = corridorId;
+          final alert = context.read<AlertProvider>();
+          await alert.handleIncomingAlert({
+            'corridorId': corridorId ?? '',
+            'ambulanceVehicleId': vehicleId ?? '',
+            'direction': 'LEFT',
+            'etaSeconds': etaSeconds.toString(),
+            'body': 'Emergency vehicle approaching! Move to the left.',
+            'alerts': json.encode({
+              'en': 'Emergency approaching! Move LEFT now.',
+              'hi': 'आपातकालीन वाहन आ रहा है! बाईं ओर मुड़ें।',
+              'bn': 'জরুরি গাড়ি আসছে! বাম দিকে সরুন।',
+            }),
+            'ambulanceLat': ambLatStr,
+            'ambulanceLon': ambLonStr,
+          });
+          if (vehicleId != null) _startAmbulancePosPolling(vehicleId);
+        }
+        break;
+      }
+    } catch (e) {
+      debugPrint('Corridor poll error: $e');
+    }
+  }
+
+  // ── Live ambulance position polling ──────────────────────────────────────
+  Timer? _ambPollTimer;
+
+  void _startAmbulancePosPolling(String vehicleId) {
+    _ambPollTimer?.cancel();
+    _ambPollTimer = Timer.periodic(const Duration(seconds: 4), (_) async {
+      if (!mounted) return;
+      try {
+        final resp = await _dio.get('gps/$vehicleId');
+        final coord = resp.data?['coordinate'];
+        if (coord == null) return;
+        final lat = (coord['latitude'] as num?)?.toDouble();
+        final lon = (coord['longitude'] as num?)?.toDouble();
+        if (lat == null || lon == null) return;
+        final newPos = LatLng(lat, lon);
+
+        if (_myPos != null) {
+          final dist = _haversineMeters(
+              _myPos!.latitude, _myPos!.longitude, lat, lon);
+          if (dist > _proximityThresholdMeters) {
+            _clearAmbulance();
+            return;
+          }
+        }
+        _setAmbulanceMarker(newPos);
+      } catch (e) {
+        debugPrint('Amb pos poll error: $e');
+      }
     });
   }
 
-  void _updateAmbulanceMarkerFromPos(LatLng pos) {
+  void _setAmbulanceMarker(LatLng pos) {
+    if (!mounted) return;
     setState(() {
+      _ambPos = pos;
       _markers.removeWhere((m) => m.markerId.value == 'ambulance_unit');
       _markers.add(Marker(
         markerId: const MarkerId('ambulance_unit'),
         position: pos,
-        icon: _ambIcon ?? BitmapDescriptor.defaultMarker,
-        infoWindow: const InfoWindow(title: 'AMBULANCE'),
+        icon: _ambIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+        infoWindow: const InfoWindow(title: '🚑 AMBULANCE'),
       ));
     });
   }
 
-  void _updateAmbulanceMarker(Map<String, dynamic>? alertData) {
-    if (alertData == null) {
-      setState(() {
-        _markers.removeWhere((m) => m.markerId.value == 'ambulance_unit');
-      });
-      return;
-    }
-
-    try {
-      final lat = double.tryParse(alertData['ambulanceLat'] ?? '');
-      final lon = double.tryParse(alertData['ambulanceLon'] ?? '');
-
-      if (lat != null && lon != null) {
-        setState(() {
-          _markers.removeWhere((m) => m.markerId.value == 'ambulance_unit');
-          _markers.add(Marker(
-            markerId: const MarkerId('ambulance_unit'),
-            position: LatLng(lat, lon),
-            icon: _ambIcon ?? BitmapDescriptor.defaultMarker,
-            infoWindow: const InfoWindow(title: 'AMBULANCE'),
-          ));
-        });
+  void _clearAmbulance() {
+    if (!mounted) return;
+    setState(() {
+      _ambPos = null;
+      _activeCorridorId = null;
+      _markers.removeWhere((m) => m.markerId.value == 'ambulance_unit');
+      // Re-add the civilian car immediately using last known position.
+      // The GPS stream only fires on movement (distanceFilter: 5m), so without
+      // this the car marker disappears until the user physically moves.
+      if (_myPos != null) {
+        _markers.removeWhere((m) => m.markerId.value == 'user_car');
+        _markers.add(Marker(
+          markerId: const MarkerId('user_car'),
+          position: _myPos!,
+          icon: _carIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+          infoWindow: const InfoWindow(title: 'MY CAR'),
+        ));
       }
-    } catch (e) {
-      debugPrint('Error updating ambulance marker: $e');
+    });
+    _ambPollTimer?.cancel();
+    context.read<AlertProvider>().clearCorridor();
+  }
+
+  // ── User GPS Tracking ─────────────────────────────────────────────────────
+  void _addCarMarker(LatLng pos) {
+    if (!mounted) return;
+    setState(() {
+      _markers.removeWhere((m) => m.markerId.value == 'user_car');
+      _markers.add(Marker(
+        markerId: const MarkerId('user_car'),
+        position: pos,
+        icon: _carIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+        infoWindow: const InfoWindow(title: 'MY CAR'),
+      ));
+    });
+  }
+
+  void _startLocationTracking() async {
+    LocationPermission perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.denied) {
+      perm = await Geolocator.requestPermission();
+    }
+    if (perm == LocationPermission.whileInUse || perm == LocationPermission.always) {
+      // Get an immediate position so the car marker appears right away
+      // (the stream only fires after the user moves distanceFilter meters).
+      try {
+        final initial = await Geolocator.getCurrentPosition(
+            desiredAccuracy: LocationAccuracy.high);
+        _myPos = LatLng(initial.latitude, initial.longitude);
+        _addCarMarker(_myPos!);
+        _mapController?.animateCamera(CameraUpdate.newLatLng(_myPos!));
+      } catch (_) {}
+
+      _posSub = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high, distanceFilter: 5),
+      ).listen((pos) {
+        if (!mounted) return;
+        _myPos = LatLng(pos.latitude, pos.longitude);
+        _addCarMarker(_myPos!);
+        _mapController?.animateCamera(CameraUpdate.newLatLng(_myPos!));
+      });
     }
   }
 
+  String _distLabel() {
+    if (_myPos == null || _ambPos == null) return '';
+    final d = _haversineMeters(_myPos!.latitude, _myPos!.longitude,
+        _ambPos!.latitude, _ambPos!.longitude);
+    return d < 1000 ? '${d.toStringAsFixed(0)}m' : '${(d / 1000).toStringAsFixed(1)}km';
+  }
+
+  @override
+  void dispose() {
+    _pulseCtrl.dispose();
+    _posSub?.cancel();
+    _corridorPollTimer?.cancel();
+    _ambPollTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final alertProv = context.watch<AlertProvider>();
-    
-    // Check for changes in alert state to update markers
-    if (alertProv.hasActiveAlert) {
-      _updateAmbulanceMarker(alertProv.currentAlert);
-    } else {
-      _updateAmbulanceMarker(null);
-    }
-
+    final alert = context.watch<AlertProvider>();
     return Scaffold(
       backgroundColor: const Color(0xFF0F0F1A),
-      body: Stack(
-        children: [
-          // ── Map background ─────────────────────────────────────────────
-          GoogleMap(
-            initialCameraPosition: const CameraPosition(
-              target: LatLng(19.0760, 72.8777),
-              zoom: 14,
-            ),
-            onMapCreated: (ctrl) {
-              _mapController = ctrl;
-              _startLocationTracking();
-            },
-            markers: _markers,
-            myLocationEnabled: true,
-            myLocationButtonEnabled: true,
-            mapType: MapType.normal,
-          ),
+      body: Stack(children: [
+        GoogleMap(
+          initialCameraPosition: const CameraPosition(target: LatLng(19.0760, 72.8777), zoom: 14),
+          onMapCreated: (c) => _mapController = c,
+          markers: Set.from(_markers),
+          myLocationEnabled: true,
+          myLocationButtonEnabled: false,
+          mapType: MapType.normal,
+        ),
 
-          // ── Status bar ─────────────────────────────────────────────────
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(16, 48, 16, 12),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Colors.black.withValues(alpha: 0.8), Colors.transparent],
-                ),
+        // ── Top bar ────────────────────────────────────────────────────────
+        Positioned(
+          top: 0, left: 0, right: 0,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(16, 48, 16, 12),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                colors: [Colors.black.withValues(alpha: 0.85), Colors.transparent],
               ),
-              child: Row(
-                children: [
-                  const Icon(Icons.local_hospital, color: Color(0xFFFF6F00), size: 24),
-                  const SizedBox(width: 8),
-                  const Text('SankatMitra',
-                      style: TextStyle(color: Colors.white, fontSize: 18,
+            ),
+            child: Row(children: [
+              const Icon(Icons.local_hospital, color: Color(0xFFFF6F00), size: 24),
+              const SizedBox(width: 8),
+              const Text('SankatMitra',
+                  style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              const Spacer(),
+              if (alert.hasActiveAlert && _ambPos != null)
+                Container(
+                  margin: const EdgeInsets.only(right: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                      color: Colors.orangeAccent.withValues(alpha: 0.85),
+                      borderRadius: BorderRadius.circular(20)),
+                  child: Text('🚑 ${_distLabel()} away',
+                      style: const TextStyle(color: Colors.white, fontSize: 12,
                           fontWeight: FontWeight.bold)),
-                  const Spacer(),
-                  IconButton(
-                    icon: const Icon(Icons.settings, color: Colors.white70),
-                    onPressed: () => _showSettings(context, alertProv),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: alertProv.hasActiveAlert
-                          ? Colors.red.withValues(alpha: 0.8)
-                          : Colors.green.withValues(alpha: 0.6),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      alertProv.hasActiveAlert ? '🚨 ALERT ACTIVE' : '✅ Clear',
-                      style: const TextStyle(color: Colors.white, fontSize: 12),
-                    ),
-                  ),
-                ],
+                ),
+              IconButton(
+                icon: const Icon(Icons.settings, color: Colors.white70),
+                onPressed: () => _showSettings(context, alert),
               ),
-            ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: alert.hasActiveAlert
+                      ? Colors.red.withValues(alpha: 0.8)
+                      : Colors.green.withValues(alpha: 0.6),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(alert.hasActiveAlert ? '🚨 ALERT' : '✅ Clear',
+                    style: const TextStyle(color: Colors.white, fontSize: 12)),
+              ),
+            ]),
           ),
+        ),
 
-          // ── Locate Me Button ───────────────────────────────────────────
-          Positioned(
-            bottom: alertProv.hasActiveAlert ? 220 : 30,
-            right: 16,
-            child: FloatingActionButton(
-              heroTag: 'locate_me_civilian',
-              mini: true,
-              backgroundColor: const Color(0xFF16213E),
-              child: const Icon(Icons.my_location, color: Color(0xFFFF6F00)),
-              onPressed: () => _startLocationTracking(),
-            ),
+        // ── Locate Me FAB ─────────────────────────────────────────────────
+        Positioned(
+          bottom: alert.hasActiveAlert ? 220 : 30, right: 16,
+          child: FloatingActionButton(
+            heroTag: 'locate_me',
+            mini: true,
+            backgroundColor: const Color(0xFF16213E),
+            child: const Icon(Icons.my_location, color: Color(0xFFFF6F00)),
+            onPressed: () {
+              if (_myPos != null) {
+                _mapController?.animateCamera(CameraUpdate.newLatLngZoom(_myPos!, 15));
+              }
+            },
           ),
+        ),
 
-          // ── Alert overlay ──────────────────────────────────────────────
-          if (alertProv.hasActiveAlert && alertProv.showTextAlert)
-            _AlertOverlay(
-              alert: alertProv.currentAlert!,
-              pulseAnimation: _pulseAnimation,
-              onDismiss: alertProv.dismissAlert,
-            ),
-        ],
-      ),
+        // ── Alert overlay ─────────────────────────────────────────────────
+        if (alert.hasActiveAlert && alert.showTextAlert)
+          _AlertOverlay(
+            alert: alert.currentAlert!,
+            pulseAnimation: _pulseAnim,
+            onDismiss: alert.dismissAlert,
+          ),
+      ]),
     );
   }
 
-  void _showSettings(BuildContext context, AlertProvider provider) {
+  void _showSettings(BuildContext ctx, AlertProvider prov) {
     showModalBottomSheet(
-      context: context,
+      context: ctx,
       backgroundColor: const Color(0xFF16213E),
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) => Padding(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => StatefulBuilder(
+        builder: (_, ss) => Padding(
           padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Alert Preferences',
-                  style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 24),
-              SwitchListTile(
-                title: const Text('Voice Instructions', style: TextStyle(color: Colors.white)),
-                subtitle: const Text('Sequential EN/HI/BN voice guidance', style: TextStyle(color: Colors.white54)),
-                value: provider.playVoiceAlert,
-                activeTrackColor: const Color(0xFFFF6F00),
-                onChanged: (val) {
-                  provider.toggleVoice(val);
-                  setState(() {});
-                },
-              ),
-              SwitchListTile(
-                title: const Text('Text Notifications', style: TextStyle(color: Colors.white)),
-                subtitle: const Text('Show visual alert overlay', style: TextStyle(color: Colors.white54)),
-                value: provider.showTextAlert,
-                activeTrackColor: const Color(0xFFFF6F00),
-                onChanged: (val) {
-                  provider.toggleText(val);
-                  setState(() {});
-                },
-              ),
-              const SizedBox(height: 16),
-            ],
-          ),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('Alert Preferences',
+                style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            SwitchListTile(
+              title: const Text('Voice Instructions', style: TextStyle(color: Colors.white)),
+              subtitle: const Text('EN / हिन्दी / বাংলা', style: TextStyle(color: Colors.white54)),
+              value: prov.playVoiceAlert,
+              activeTrackColor: const Color(0xFFFF6F00),
+              onChanged: (v) { prov.toggleVoice(v); ss(() {}); },
+            ),
+            SwitchListTile(
+              title: const Text('Text Overlay', style: TextStyle(color: Colors.white)),
+              value: prov.showTextAlert,
+              activeTrackColor: const Color(0xFFFF6F00),
+              onChanged: (v) { prov.toggleText(v); ss(() {}); },
+            ),
+            const SizedBox(height: 16),
+          ]),
         ),
       ),
     );
   }
 }
 
-// Background logic moved to top-level
-
 // ---------------------------------------------------------------------------
 // Alert Overlay Widget
 // ---------------------------------------------------------------------------
-
 class _AlertOverlay extends StatefulWidget {
   final Map<String, dynamic> alert;
   final Animation<double> pulseAnimation;
   final VoidCallback onDismiss;
 
-  const _AlertOverlay({
-    required this.alert,
-    required this.pulseAnimation,
-    required this.onDismiss,
-  });
+  const _AlertOverlay({required this.alert, required this.pulseAnimation, required this.onDismiss});
 
   @override
   State<_AlertOverlay> createState() => _AlertOverlayState();
 }
 
 class _AlertOverlayState extends State<_AlertOverlay> {
-  int _langIndex = 0;
-  Timer? _timer;
-  Map<String, dynamic> _multilingual = {};
+  int _langIdx = 0;
+  Timer? _rotTimer;
+  Map<String, dynamic> _ml = {};
+
+  static const _langFlags = {'en': '🇬🇧', 'hi': '🇮🇳', 'bn': '🇧🇩'};
 
   @override
   void initState() {
     super.initState();
-    _parseAlerts();
+    _parse();
     _startRotation();
   }
 
-  void _parseAlerts() {
+  void _parse() {
     try {
-      if (widget.alert['alerts'] != null) {
-        _multilingual = json.decode(widget.alert['alerts']);
-      } else {
-        _multilingual = {'en': widget.alert['body'] ?? 'Emergency vehicle approaching'};
-      }
-    } catch (e) {
-      _multilingual = {'en': widget.alert['body'] ?? 'Emergency vehicle approaching'};
+      _ml = widget.alert['alerts'] != null
+          ? json.decode(widget.alert['alerts'])
+          : {'en': widget.alert['body'] ?? 'Emergency vehicle approaching'};
+    } catch (_) {
+      _ml = {'en': 'Emergency vehicle approaching'};
     }
   }
 
   void _startRotation() {
-    final languages = _multilingual.keys.toList();
-    if (languages.length <= 1) return;
-
-    _timer = Timer.periodic(const Duration(seconds: 3), (timer) {
-      if (mounted) {
-        setState(() {
-          _langIndex = (_langIndex + 1) % languages.length;
-        });
-      }
-    });
+    if (_ml.length <= 1) return;
+    _rotTimer = Timer.periodic(const Duration(seconds: 3),
+        (_) { if (mounted) setState(() => _langIdx = (_langIdx + 1) % _ml.length); });
   }
 
   @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
+  void dispose() { _rotTimer?.cancel(); super.dispose(); }
 
-  IconData _directionIcon(String direction) {
-    switch (direction) {
-      case 'LEFT': return Icons.arrow_left;
-      case 'RIGHT': return Icons.arrow_right;
-      default: return Icons.arrow_downward;
+  IconData _icon(String dir) {
+    switch (dir) {
+      case 'LEFT': return Icons.turn_left;
+      case 'RIGHT': return Icons.turn_right;
+      default: return Icons.arrow_circle_down;
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final direction = widget.alert['direction'] ?? 'PULL_OVER';
+    final direction = widget.alert['direction'] ?? 'LEFT';
     final eta = widget.alert['etaSeconds'] ?? '120';
-    final languages = _multilingual.keys.toList();
-    final currentText = _multilingual[languages[_langIndex]] ?? '';
+    final langs = _ml.keys.toList();
+    final lang = langs[_langIdx];
+    final text = _ml[lang] ?? '';
 
     return Positioned(
-      bottom: 0,
-      left: 0,
-      right: 0,
+      bottom: 0, left: 0, right: 0,
       child: AnimatedBuilder(
         animation: widget.pulseAnimation,
         builder: (_, child) => Transform.scale(scale: widget.pulseAnimation.value, child: child),
@@ -540,60 +590,46 @@ class _AlertOverlayState extends State<_AlertOverlay> {
           margin: const EdgeInsets.all(16),
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            color: const Color(0xFFB71C1C),
+            gradient: const LinearGradient(
+                colors: [Color(0xFFB71C1C), Color(0xFF7F0000)],
+                begin: Alignment.topLeft, end: Alignment.bottomRight),
             borderRadius: BorderRadius.circular(20),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.red.withValues(alpha: 0.5),
-                blurRadius: 20,
-                spreadRadius: 4,
-              ),
-            ],
+            boxShadow: [BoxShadow(color: Colors.red.withValues(alpha: 0.55), blurRadius: 24, spreadRadius: 4)],
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.local_hospital, color: Colors.white, size: 32),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('🚑 AMBULANCE APPROACHING',
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                        Text('Arriving in ~$eta seconds', style: const TextStyle(color: Colors.white70)),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close, color: Colors.white70),
-                    onPressed: widget.onDismiss,
-                  ),
-                ],
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Row(children: [
+              const Text('🚑', style: TextStyle(fontSize: 30)),
+              const SizedBox(width: 12),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('AMBULANCE APPROACHING',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                Text('ETA ~$eta seconds', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+              ])),
+              IconButton(icon: const Icon(Icons.close, color: Colors.white70), onPressed: widget.onDismiss),
+            ]),
+            const Divider(color: Colors.white24, height: 20),
+            Row(children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12)),
+                child: Icon(_icon(direction), color: Colors.white, size: 40),
               ),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(_directionIcon(direction), color: Colors.white, size: 48),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 500),
-                      child: Text(
-                        currentText.toUpperCase(),
-                        key: ValueKey(currentText),
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
+              const SizedBox(width: 16),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('${_langFlags[lang] ?? ''} ${lang.toUpperCase()}',
+                    style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                const SizedBox(height: 4),
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 400),
+                  child: Text(text,
+                      key: ValueKey(text),
+                      style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold)),
+                ),
+              ])),
+            ]),
+          ]),
         ),
       ),
     );

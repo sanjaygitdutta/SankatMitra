@@ -1,0 +1,12 @@
+INIT_START Runtime Version: python:3.11.mainlinev2.v3	Runtime Version ARN: arn:aws:lambda:ap-south-1::runtime:0de7d4de4aef04631dc8443fb686ab8bf14de4d4a348cb0d407cce5f48aef7d8
+[WARNING]	2026-03-06T17:29:53.196Z		LAMBDA_WARNING: Unhandled exception. The most likely cause is an issue in the function code. However, in rare cases, a Lambda runtime update can cause unexpected function behavior. For functions using managed runtimes, runtime updates can be triggered by a function change, or can be applied automatically. To determine if the runtime has been updated, check the runtime version in the INIT_START log entry. If this error correlates with a change in the runtime version, you may be able to mitigate this error by temporarily rolling back to the previous runtime version. For more information, see https://docs.aws.amazon.com/lambda/latest/dg/runtimes-update.html
+[ERROR] Runtime.ImportModuleError: Unable to import module 'corridor_handler': cannot import name 'CorridorRequest' from 'mitrashared.models' (/var/task/mitrashared/models.py)
+Traceback (most recent call last):
+INIT_REPORT Init Duration: 321.39 ms	Phase: init	Status: error	Error Type: Runtime.ImportModuleError
+[WARNING]	2026-03-06T17:29:53.448Z		LAMBDA_WARNING: Unhandled exception. The most likely cause is an issue in the function code. However, in rare cases, a Lambda runtime update can cause unexpected function behavior. For functions using managed runtimes, runtime updates can be triggered by a function change, or can be applied automatically. To determine if the runtime has been updated, check the runtime version in the INIT_START log entry. If this error correlates with a change in the runtime version, you may be able to mitigate this error by temporarily rolling back to the previous runtime version. For more information, see https://docs.aws.amazon.com/lambda/latest/dg/runtimes-update.html
+[ERROR] Runtime.ImportModuleError: Unable to import module 'corridor_handler': cannot import name 'CorridorRequest' from 'mitrashared.models' (/var/task/mitrashared/models.py)
+Traceback (most recent call last):
+INIT_REPORT Init Duration: 234.66 ms	Phase: invoke	Status: error	Error Type: Runtime.ImportModuleError
+START RequestId: 9d260cdd-b261-4396-b5e9-bcb3aa7b41cf Version: $LATEST
+END RequestId: 9d260cdd-b261-4396-b5e9-bcb3aa7b41cf
+REPORT RequestId: 9d260cdd-b261-4396-b5e9-bcb3aa7b41cf	Duration: 246.15 ms	Billed Duration: 247 ms	Memory Size: 1024 MB	Max Memory Used: 65 MB	Status: error	Error Type: Runtime.ImportModuleError

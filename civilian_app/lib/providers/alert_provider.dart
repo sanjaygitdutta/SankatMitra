@@ -1,14 +1,24 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_tts/flutter_tts.dart';
+import 'package:js/js.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+// Declare the JS functions defined in index.html.
+// We pass JSON-encoded strings because Dart List<String> does NOT automatically
+// convert to a JS array across the @JS() boundary.
+@JS('smSpeak')
+external void _jsSpeak(String textsJson, String langsJson);
+
+@JS('smCancelSpeech')
+external void _jsCancelSpeech();
+
+/// Multilingual alert provider using the browser's Web Speech API.
+/// Voice is played via global JS functions smSpeak / smCancelSpeech in index.html.
 class AlertProvider extends ChangeNotifier {
-  final FlutterTts _tts = FlutterTts();
   Map<String, dynamic>? _currentAlert;
   bool _hasActiveAlert = false;
-  
-  // User Preferences
+  String? _ambulanceVehicleId;
+
   bool _playVoiceAlert = true;
   bool _showTextAlert = true;
 
@@ -16,17 +26,10 @@ class AlertProvider extends ChangeNotifier {
   bool get hasActiveAlert => _hasActiveAlert;
   bool get playVoiceAlert => _playVoiceAlert;
   bool get showTextAlert => _showTextAlert;
+  String? get ambulanceVehicleId => _ambulanceVehicleId;
 
   AlertProvider() {
     _loadPreferences();
-    _initTts();
-  }
-
-  Future<void> _initTts() async {
-    await _tts.setVolume(1.0);
-    await _tts.setSpeechRate(0.5);
-    await _tts.setPitch(1.0);
-    await _tts.awaitSpeakCompletion(true);
   }
 
   Future<void> _loadPreferences() async {
@@ -40,7 +43,9 @@ class AlertProvider extends ChangeNotifier {
     _playVoiceAlert = value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('playVoiceAlert', value);
-    if (!value) await _tts.stop();
+    if (!value) {
+      try { _jsCancelSpeech(); } catch (_) {}
+    }
     notifyListeners();
   }
 
@@ -54,53 +59,55 @@ class AlertProvider extends ChangeNotifier {
   Future<void> handleIncomingAlert(Map<String, dynamic> data) async {
     _currentAlert = data;
     _hasActiveAlert = true;
+    _ambulanceVehicleId = data['ambulanceVehicleId'] as String?;
     notifyListeners();
 
     if (_playVoiceAlert) {
-      await _speakMultilingualAlert(data);
+      _speakMultilingualAlert(data);
     }
   }
 
-  Future<void> _speakMultilingualAlert(Map<String, dynamic> data) async {
+  void _speakMultilingualAlert(Map<String, dynamic> data) {
     try {
       Map<String, dynamic> multilingual = {};
-      
-      // Try to parse the 'alerts' JSON string from FCM data
       if (data['alerts'] != null) {
         multilingual = json.decode(data['alerts']);
       } else {
-        // Fallback to the body if no multilingual data
         multilingual = {'en': data['body'] ?? 'Emergency vehicle approaching'};
       }
 
-      // 1. English
-      if (multilingual['en'] != null) {
-        await _tts.setLanguage("en-US");
-        await _tts.speak(multilingual['en']);
-        await Future.delayed(const Duration(seconds: 1)); // Small gap
+      // Build parallel text + lang arrays for the JS function
+      final texts = <String>[];
+      final langs = <String>[];
+      final bcp47Map = {'en': 'en-US', 'hi': 'hi-IN', 'bn': 'bn-IN'};
+
+      for (final entry in multilingual.entries) {
+        final text = (entry.value as String? ?? '').trim();
+        if (text.isEmpty) continue;
+        texts.add(text);
+        langs.add(bcp47Map[entry.key] ?? 'en-US');
       }
 
-      // 2. Hindi
-      if (multilingual['hi'] != null) {
-        await _tts.setLanguage("hi-IN");
-        await _tts.speak(multilingual['hi']);
-        await Future.delayed(const Duration(seconds: 1));
-      }
-
-      // 3. Bengali
-      if (multilingual['bn'] != null) {
-        await _tts.setLanguage("bn-IN");
-        await _tts.speak(multilingual['bn']);
+      if (texts.isNotEmpty) {
+        _jsSpeak(json.encode(texts), json.encode(langs));
       }
     } catch (e) {
-      debugPrint("TTS Error: $e");
+      debugPrint('smSpeak error: $e');
     }
+  }
+
+  void clearCorridor() {
+    _currentAlert = null;
+    _hasActiveAlert = false;
+    _ambulanceVehicleId = null;
+    try { _jsCancelSpeech(); } catch (_) {}
+    notifyListeners();
   }
 
   void dismissAlert() {
     _currentAlert = null;
     _hasActiveAlert = false;
-    _tts.stop();
+    try { _jsCancelSpeech(); } catch (_) {}
     notifyListeners();
   }
 }

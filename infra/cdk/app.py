@@ -24,7 +24,8 @@ from aws_cdk import (
 )
 from constructs import Construct
 
-
+# SankatMitra Stack
+# Stack Version: 1772662000 (Diagnostic Bridge Deploy)
 class SankatMitraStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs):
         super().__init__(scope, construct_id, **kwargs)
@@ -145,40 +146,39 @@ class SankatMitraStack(Stack):
         # ── Lambda Functions ──────────────────────────────────────────────
         auth_fn = lambda_.Function(self, "AuthLambda",
             function_name="sankatmitra-auth-lambda",
-            handler="lambdas.auth_lambda.handler.handler",
-            code=lambda_.Code.from_asset("../../backend"),
+            handler="auth_handler.handler",
+            code=lambda_.Code.from_asset("../../backend_final"),
             **lambda_kwargs)
-
+ 
         gps_fn = lambda_.Function(self, "GPSLambda",
             function_name="sankatmitra-gps-lambda",
-            handler="lambdas.gps_lambda.handler.handler",
-            code=lambda_.Code.from_asset("../../backend"),
+            handler="gps_handler.handler",
+            code=lambda_.Code.from_asset("../../backend_final"),
             **lambda_kwargs)
-
-        spoof_fn = lambda_.Function(self, "SpoofingLambda",
+ 
+        spoof_fn = lambda_.Function(self, "SpoofingDetectionLambda",
             function_name="sankatmitra-spoofing-lambda",
-            handler="lambdas.spoofing_lambda.handler.handler",
-            code=lambda_.Code.from_asset("../../backend"),
+            handler="spoofing_handler.handler",
+            code=lambda_.Code.from_asset("../../backend_final"),
             **lambda_kwargs)
-
-        route_fn = lambda_.Function(self, "RouteLambda",
+ 
+        route_fn = lambda_.Function(self, "RoutePredictionLambda",
             function_name="sankatmitra-route-lambda",
-            handler="lambdas.route_lambda.handler.handler",
-            code=lambda_.Code.from_asset("../../backend"),
+            handler="route_handler.handler",
+            code=lambda_.Code.from_asset("../../backend_final"),
             **lambda_kwargs)
-
+ 
         alert_fn = lambda_.Function(self, "AlertLambda",
             function_name="sankatmitra-alert-lambda",
-            handler="lambdas.alert_lambda.handler.handler",
-            code=lambda_.Code.from_asset("../../backend"),
+            handler="alert_handler.handler",
+            code=lambda_.Code.from_asset("../../backend_final"),
             **lambda_kwargs)
-
+ 
         corridor_fn = lambda_.Function(self, "CorridorLambda",
             function_name="sankatmitra-corridor-lambda",
-            handler="lambdas.corridor_lambda.handler.handler",
-            code=lambda_.Code.from_asset("../../backend"),
-            memory_size=1024,  # More memory for orchestration
-            **{k: v for k, v in lambda_kwargs.items() if k != "memory_size"})
+            handler="corridor_handler.handler",
+            code=lambda_.Code.from_asset("../../backend_final"),
+            **lambda_kwargs)
 
         # ── API Gateway ───────────────────────────────────────────────────
         api = apigw.RestApi(
